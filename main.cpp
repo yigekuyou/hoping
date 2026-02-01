@@ -19,12 +19,11 @@ public:
 				std::string xtc_file;
 				std::string output_file = "results.csv";
 				float threshold = 0.05f;
-				int tw_frames = 100;
+				int tw_frames = 20;
 		};
 
 		HoppingAnalyzerV3(Config c) : cfg(c) {}
 
-		// 解析 GRO 文件获取 SOL 的 O 原子
 		std::vector<int> getOxygenIndices() {
 				std::vector<int> idx;
 				std::ifstream f(cfg.gro_file);
@@ -44,106 +43,125 @@ public:
 
 		void execute() {
 				auto o_indices = getOxygenIndices();
-				if (o_indices.empty()) { std::cerr << "未找到 SOL O 原子\n"; return; }
+				if (o_indices.empty()) { std::cerr << "错误: 未找到 SOL O 原子\n"; return; }
 				int n_sol = o_indices.size();
 
-				// 1. 初始化 OpenCL 3.0 环境
+				int natoms;
+				char* xtc_c = const_cast<char*>(cfg.xtc_file.c_str());
+				if (read_xtc_natoms(xtc_c, &natoms) != 0) { std::cerr << "错误: 无法读取 XTC 文件\n"; return; }
+
+				XDRFILE* xd = xdrfile_open(xtc_c, "r");
+				std::vector<float> all_coords;
+				std::vector<rvec> coords(natoms);
+				matrix box; float time, prec; int step;
+				int total_frames = 0;
+
+				std::cout << "1. 正在读取轨迹..." << std::endl;
+				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
+						for(int idx : o_indices) {
+								all_coords.push_back(coords[idx][0]);
+								all_coords.push_back(coords[idx][1]);
+								all_coords.push_back(coords[idx][2]);
+						}
+						total_frames++;
+				}
+				xdrfile_close(xd);
+				if (total_frames == 0) { std::cerr << "错误: 轨迹中没有帧\n"; return; }
+				std::cout << "载入完成: " << total_frames << " 帧, " << n_sol << " 原子/帧" << std::endl;
+
+				// 2. 环境初始化
 				std::vector<cl::Platform> platforms;
 				cl::Platform::get(&platforms);
-				if (platforms.empty()) {
-						std::cerr << "未找到 OpenCL 平台" << std::endl;
-						return;
-				}
-
 				std::vector<cl::Device> devices;
-				// 这里必须传入 vector 的地址
 				platforms[0].getDevices(CL_DEVICE_TYPE_GPU, &devices);
+				cl::Context context(devices[0]);
+				cl::CommandQueue queue(context, devices[0]);
 
-				if (devices.empty()) {
-						std::cerr << "未找到 GPU 设备" << std::endl;
-						return;
-				}
-
-				cl::Device device = devices[0]; // 选取第一个 GPU
-				cl::Context context(device);
-				cl::CommandQueue queue(context, device);
-				// 2. 编译 Kernel
+				// 3. Kernel
 				std::string src = R"(
-						__kernel void calc_hopping(__global const float* data, __global float* res,
-																			int n, int hw, int t_idx, int sz) {
+						__kernel void calc_hopping_full(__global const float* coords,
+																					 __global float* res,
+																					 int n_sol, int total_frames, int hw) {
 								int i = get_global_id(0);
-								if(i >= n) return;
-								float s1 = 0, s2 = 0;
+								int t = get_global_id(1);
+
+								if(i >= n_sol || t < hw || t >= (total_frames - hw)) return;
+
+								float s1 = 0.0f, s2 = 0.0f;
+								// 计算左窗口均值
 								for(int j=1; j<=hw; j++) {
-										s1 += data[i + ((t_idx - j + sz) % sz) * n];
-										s2 += data[i + ((t_idx + j) % sz) * n];
+										int idx = ((t - j) * n_sol + i) * 3;
+										float x = coords[idx]; float y = coords[idx+1]; float z = coords[idx+2];
+										s1 += sqrt(x*x + y*y + z*z);
 								}
-								float a1 = s1/hw, a2 = s2/hw;
-								float ta = 0, tb = 0;
+								// 计算右窗口均值
 								for(int j=1; j<=hw; j++) {
-										float v1 = data[i + ((t_idx - j + sz) % sz) * n];
-										float v2 = data[i + ((t_idx + j) % sz) * n];
+										int idx = ((t + j) * n_sol + i) * 3;
+										float x = coords[idx]; float y = coords[idx+1]; float z = coords[idx+2];
+										s2 += sqrt(x*x + y*y + z*z);
+								}
+
+								float a1 = s1/hw, a2 = s2/hw;
+								float ta = 0.0f, tb = 0.0f;
+
+								// 计算交叉方差
+								for(int j=1; j<=hw; j++) {
+										int idx1 = ((t - j) * n_sol + i) * 3;
+										float x1 = coords[idx1]; float y1 = coords[idx1+1]; float z1 = coords[idx1+2];
+										float v1 = sqrt(x1*x1 + y1*y1 + z1*z1);
+
+										int idx2 = ((t + j) * n_sol + i) * 3;
+										float x2 = coords[idx2]; float y2 = coords[idx2+1]; float z2 = coords[idx2+2];
+										float v2 = sqrt(x2*x2 + y2*y2 + z2*z2);
+
 										ta += (v1 - a2)*(v1 - a2);
 										tb += (v2 - a1)*(v2 - a1);
 								}
-								res[i] = sqrt((ta/hw)*(tb/hw));
+								res[t * n_sol + i] = sqrt((ta/hw)*(tb/hw));
 						}
 				)";
+
 				cl::Program program(context, src);
-				program.build("-cl-std=CL3.0");
-				cl::Kernel kernel(program, "calc_hopping");
+				if (program.build({devices[0]}, "-cl-std=CL3.0") != CL_SUCCESS) {
+						std::cerr << "编译错误: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[0]) << std::endl;
+						return;
+				}
+				cl::Kernel kernel(program, "calc_hopping_full");
 
-				// 3. 准备显存
-				cl::Buffer buf_data(context, CL_MEM_READ_WRITE, sizeof(float) * n_sol * cfg.tw_frames);
-				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY, sizeof(float) * n_sol);
+				// 4. 显存分配
+				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, all_coords.size() * sizeof(float), all_coords.data());
+				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(float));
 
-				// 4. 读取轨迹
-				int natoms;
-				char* xtc_c = const_cast<char*>(cfg.xtc_file.c_str());
-				read_xtc_natoms(xtc_c, &natoms);
-				XDRFILE* xd = xdrfile_open(xtc_c, "r");
-				std::vector<rvec> coords(natoms);
-				matrix box; float time, prec; int step;
+				// 5. 执行
+				int hw = cfg.tw_frames / 2;
+				kernel.setArg(0, buf_coords);
+				kernel.setArg(1, buf_res);
+				kernel.setArg(2, n_sol);
+				kernel.setArg(3, total_frames);
+				kernel.setArg(4, hw);
 
+				std::cout << "2. GPU 正在运行计算..." << std::endl;
+				cl_int err = queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_sol, total_frames));
+				if (err != CL_SUCCESS) { std::cerr << "运行错误代码: " << err << std::endl; return; }
+
+				std::vector<float> results(n_sol * total_frames, 0.0f);
+				queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(float), results.data());
+
+				// 6. 结果输出检查
+				std::cout << "3. 正在保存结果..." << std::endl;
 				std::ofstream csv(cfg.output_file);
 				csv << "atom_id,frame,hopping_value\n";
-
-				int frame_count = 0;
-				int hw = cfg.tw_frames / 2;
-				std::cout << "开始分析轨迹: " << cfg.xtc_file << " (OpenCL 3.0)\n";
-
-				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
-						std::vector<float> mags(n_sol);
-						for(int i=0; i<n_sol; ++i) {
-								rvec& r = coords[o_indices[i]];
-								mags[i] = std::sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]);
-						}
-
-						int pos = frame_count % cfg.tw_frames;
-						queue.enqueueWriteBuffer(buf_data, CL_TRUE, pos * n_sol * sizeof(float), n_sol * sizeof(float), mags.data());
-
-						if(frame_count >= cfg.tw_frames) {
-								int t_idx = (pos - hw + cfg.tw_frames) % cfg.tw_frames;
-								kernel.setArg(0, buf_data); kernel.setArg(1, buf_res);
-								kernel.setArg(2, n_sol); kernel.setArg(3, hw);
-								kernel.setArg(4, t_idx); kernel.setArg(5, cfg.tw_frames);
-
-								queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_sol));
-								std::vector<float> out(n_sol);
-								queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, n_sol * sizeof(float), out.data());
-
-								int target_f = frame_count - hw;
-								for(int i=0; i<n_sol; ++i) {
-										if(out[i] > cfg.threshold) {
-												csv << o_indices[i] << "," << target_f << "," << std::fixed << std::setprecision(5) << out[i] << "\n";
-										}
+				int count = 0;
+				for(int t = hw; t < total_frames - hw; ++t) {
+						for(int i = 0; i < n_sol; ++i) {
+								float val = results[t * n_sol + i];
+								if(val > cfg.threshold) {
+										csv << o_indices[i] << "," << t << "," << std::fixed << std::setprecision(5) << val << "\n";
+										count++;
 								}
 						}
-						frame_count++;
-						if(frame_count % 1000 == 0) std::cout << "当前帧: " << frame_count << "\r" << std::flush;
 				}
-				xdrfile_close(xd);
-				std::cout << "\n分析完成，结果已存至: " << cfg.output_file << std::endl;
+				std::cout << "完成！共检测到 " << count << " 次跳跃行为。" << std::endl;
 		}
 
 private:

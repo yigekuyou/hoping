@@ -9,7 +9,6 @@ qt_standard_project_setup()
 
 qt_add_executable(code
     main.cpp
-    kernel.cl
 )
 
 qt_add_translations(
