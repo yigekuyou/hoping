@@ -52,6 +52,7 @@ public:
 
 				XDRFILE* xd = xdrfile_open(xtc_c, "r");
 				std::vector<float> all_coords;
+				std::vector<float> initial_coords;
 				std::vector<rvec> coords(natoms);
 				matrix box; float time, prec; int step;
 				int total_frames = 0;
@@ -62,6 +63,12 @@ public:
 								all_coords.push_back(coords[idx][0]);
 								all_coords.push_back(coords[idx][1]);
 								all_coords.push_back(coords[idx][2]);
+
+						if (total_frames == 0) {
+												initial_coords.push_back(coords[idx][0]);
+												initial_coords.push_back(coords[idx][1]);
+												initial_coords.push_back(coords[idx][2]);
+										}
 						}
 						total_frames++;
 				}
@@ -80,13 +87,24 @@ public:
 				// 3. Kernel
 				std::string src = R"(
 						__kernel void calc_hopping_full(__global const float* coords,
-																					 __global float* res,
+																					 __global const float* initial_coords,
+																					 __global float2* res,
 																					 int n_sol, int total_frames, int hw) {
 								int i = get_global_id(0);
 								int t = get_global_id(1);
 
-								if(i >= n_sol || t < hw || t >= (total_frames - hw)) return;
+								if(i >= n_sol || t >= total_frames ) return;
+								// --- 计算位移 Displacement: |r(t) - r(0)| ---
+								int curr_idx = (t * n_sol + i) * 3;
+								int init_idx = i * 3;
 
+								float dx = coords[curr_idx]   - initial_coords[init_idx];
+								float dy = coords[curr_idx+1] - initial_coords[init_idx+1];
+								float dz = coords[curr_idx+2] - initial_coords[init_idx+2];
+								float dist = sqrt(dx*dx + dy*dy + dz*dz);
+								// --- 计算 Hopping Value ---
+								float hopping_val = 0.0f;
+								if(t >= hw && t < (total_frames - hw)) {
 								float s1 = 0.0f, s2 = 0.0f;
 								// 计算左窗口均值
 								for(int j=1; j<=hw; j++) {
@@ -117,7 +135,10 @@ public:
 										ta += (v1 - a2)*(v1 - a2);
 										tb += (v2 - a1)*(v2 - a1);
 								}
-								res[t * n_sol + i] = sqrt((ta/hw)*(tb/hw));
+								hopping_val = sqrt((ta/hw)*(tb/hw));
+							}
+						// 存储结果：x 为 hopping, y 为 displacement
+						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
 				)";
 
@@ -130,39 +151,44 @@ public:
 
 				// 4. 显存分配
 				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, all_coords.size() * sizeof(float), all_coords.data());
-				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(float));
+				cl::Buffer buf_initial(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, initial_coords.size() * sizeof(float), initial_coords.data());
+				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(cl_float2));
 
 				// 5. 执行
 				int hw = cfg.tw_frames / 2;
 				kernel.setArg(0, buf_coords);
-				kernel.setArg(1, buf_res);
-				kernel.setArg(2, n_sol);
-				kernel.setArg(3, total_frames);
-				kernel.setArg(4, hw);
+				kernel.setArg(1, buf_initial);
+				kernel.setArg(2, buf_res);
+				kernel.setArg(3, n_sol);
+				kernel.setArg(4, total_frames);
+				kernel.setArg(5, hw);
 
 				std::cout << "2. GPU 正在运行计算..." << std::endl;
 				cl_int err = queue.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_sol, total_frames));
 				if (err != CL_SUCCESS) { std::cerr << "运行错误代码: " << err << std::endl; return; }
 
-				std::vector<float> results(n_sol * total_frames, 0.0f);
-				queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(float), results.data());
+				std::vector<cl_float2> results(n_sol * total_frames);
+				queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(cl_float2), results.data());
 
 				// 6. 结果输出检查
 				std::cout << "3. 正在保存结果..." << std::endl;
 				std::ofstream csv(cfg.output_file);
-				csv << "atom_id,frame,hopping_value\n";
-				int count = 0;
-					for(int i = 0; i < n_sol; ++i) {
-							for(int t = hw; t < total_frames - hw; ++t) {
-								float val = results[t * n_sol + i];
-								if(val > cfg.threshold) {
-										csv << o_indices[i] << "," << t << "," << std::fixed << std::setprecision(5) << val << "\n";
-										count++;
-								}
+				csv << "atom_id,frame,hopping_value,displacement(nm)\n";
+
+				for(int i = 0; i < n_sol; ++i) {
+						for(int t = 0; t < total_frames; ++t) {
+								cl_float2 res_pair = results[t * n_sol + i];
+								float val = res_pair.s[0];
+								float dist = res_pair.s[1];
+
+								float final_val = (val > cfg.threshold) ? val : 0.0f;
+
+								csv << o_indices[i] << "," << t << ","
+										<< std::fixed << std::setprecision(5) << val << ","
+										<< dist << "\n";
 						}
 				}
-				std::cout << "完成！共检测到 " << count << " 次跳跃行为。" << std::endl;
-		}
+				}
 
 private:
 		Config cfg;
