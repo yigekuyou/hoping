@@ -74,35 +74,36 @@ public:
 				// 3. Kernel
 				std::string src = R"(
 						__kernel void calc_hopping_full(__global const float* coords,
-																					 __global float2* res,
-																					 int n_sol, int total_frames, int hw) {
-								int i = get_global_id(0);
-								int t = get_global_id(1);
-								if(i >= n_sol || t >= total_frames ) return;
+						__global float2* res,
+						int n_sol, int total_frames, int hw) {
+						int i = get_global_id(0);
+						int t = get_global_id(1);
+						if(i >= n_sol || t >= total_frames ) return;
 
-								// --- 计算位移 Displacement: |r(t) - r(0)| ---
-								int curr_base = (t * n_sol + i) * 3;
-								float3 p_curr = vload3(0, &coords[curr_base]);
-								float3 p_init = vload3(0, &coords[i * 3]);
-								float dist = distance(p_curr, p_init);
-								// --- 计算 Hopping Value ---
-								float hopping_val = 0.0f;
-								if(t >= hw && t < (total_frames - hw)) {
-										float ta = 0.0f, tb = 0.0f, avg1 = 0.0f, avg2 = 0.0f;
-										for(int j=1; j<=hw; j++) {
-												avg1 += length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
-												avg2 += length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
-										}
-										avg1 /= hw; avg2 /= hw;
-										for(int j=1; j<=hw; j++) {
-												float v1 = length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
-												float v2 = length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
-												ta += (v1 - avg2) * (v1 - avg2);
-												tb += (v2 - avg1) * (v2 - avg1);
-										}
-										hopping_val = native_sqrt((ta/hw) * (tb/hw));
-								}
-								res[t * n_sol + i] = (float2)(hopping_val, dist);						}
+						// --- 计算位移 Displacement: |r(t) - r(0)| ---
+						int curr_base = (t * n_sol + i) * 3;
+						float3 p_curr = vload3(0, &coords[curr_base]);
+						float3 p_init = vload3(0, &coords[i * 3]);
+						float dist = distance(p_curr, p_init);
+						// --- 计算 Hopping Value ---
+						float hopping_val = 0.0f;
+						if(t >= hw && t < (total_frames - hw)) {
+						float ta = 0.0f, tb = 0.0f, avg1 = 0.0f, avg2 = 0.0f;
+						for(int j=1; j<=hw; j++) {
+						avg1 += length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
+						avg2 += length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
+						}
+						avg1 /= hw; avg2 /= hw;
+						for(int j=1; j<=hw; j++) {
+						float v1 = length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
+						float v2 = length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
+						ta += (v1 - avg2) * (v1 - avg2);
+						tb += (v2 - avg1) * (v2 - avg1);
+						}
+						hopping_val = native_sqrt((ta/hw) * (tb/hw));
+						}
+						res[t * n_sol + i] = (float2)(hopping_val, dist);
+						}
 				)";
 
 				cl::Program program(context, src);
