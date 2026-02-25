@@ -68,12 +68,8 @@ public:
 				std::cout << "载入完成: " << total_frames << " 帧, " << n_sol << " 原子/帧" << std::endl;
 
 				// 2. 环境初始化
-				std::vector<cl::Platform> platforms;
-				cl::Platform::get(&platforms);
-				std::vector<cl::Device> devices;
-				platforms[0].getDevices(CL_DEVICE_TYPE_GPU, &devices);
-				cl::Context context(devices[0]);
-				cl::CommandQueue queue(context, devices[0]);
+				cl::Context context(CL_DEVICE_TYPE_GPU);
+				cl::CommandQueue queue(context, context.getInfo<CL_CONTEXT_DEVICES>()[0]);
 
 				// 3. Kernel
 				std::string src = R"(
@@ -86,44 +82,32 @@ public:
 
 								// --- 计算位移 Displacement: |r(t) - r(0)| ---
 								int curr_base = (t * n_sol + i) * 3;
-								int init_base = i * 3; // 直接从 coords 的开头取初始帧
-								float3 p_curr = (float3)(coords[curr_base], coords[curr_base+1], coords[curr_base+2]);
-								float3 p_init = (float3)(coords[init_base], coords[init_base+1], coords[init_base+2]);
+								float3 p_curr = vload3(0, &coords[curr_base]);
+								float3 p_init = vload3(0, &coords[i * 3]);
 								float dist = distance(p_curr, p_init);
 								// --- 计算 Hopping Value ---
 								float hopping_val = 0.0f;
 								if(t >= hw && t < (total_frames - hw)) {
-										float avg1 = 0.0f, avg2 = 0.0f;
-										// 计算 W1, W2 均值
+										float ta = 0.0f, tb = 0.0f, avg1 = 0.0f, avg2 = 0.0f;
 										for(int j=1; j<=hw; j++) {
-												int idx1 = ((t - j) * n_sol + i) * 3;
-												int idx2 = ((t + j) * n_sol + i) * 3;
-												avg1 += length((float3)(coords[idx1], coords[idx1+1], coords[idx1+2]));
-												avg2 += length((float3)(coords[idx2], coords[idx2+1], coords[idx2+2]));
+												avg1 += length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
+												avg2 += length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
 										}
 										avg1 /= hw; avg2 /= hw;
-
-										float ta = 0.0f, tb = 0.0f;
 										for(int j=1; j<=hw; j++) {
-												int idx1 = ((t - j) * n_sol + i) * 3;
-												int idx2 = ((t + j) * n_sol + i) * 3;
-												float v1 = length((float3)(coords[idx1], coords[idx1+1], coords[idx1+2]));
-												float v2 = length((float3)(coords[idx2], coords[idx2+1], coords[idx2+2]));
+												float v1 = length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
+												float v2 = length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
 												ta += (v1 - avg2) * (v1 - avg2);
 												tb += (v2 - avg1) * (v2 - avg1);
 										}
-										hopping_val = sqrt((ta/hw) * (tb/hw));
+										hopping_val = native_sqrt((ta/hw) * (tb/hw));
 								}
-								res[t * n_sol + i] = (float2)(hopping_val, dist);
-						}
+								res[t * n_sol + i] = (float2)(hopping_val, dist);						}
 				)";
 
 				cl::Program program(context, src);
-				if (program.build({devices[0]}, "-cl-std=CL3.0") != CL_SUCCESS) {
-						std::cerr << "编译错误: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[0]) << std::endl;
-						return;
-				}
-				cl::Kernel kernel(program, "calc_hopping_full");
+								program.build("-cl-std=CL3.0 -cl-mad-enable -cl-fast-relaxed-math");
+								cl::Kernel kernel(program, "calc_hopping_full");
 
 				// 4. 显存分配
 				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, all_coords.size() * sizeof(float), all_coords.data());
