@@ -132,43 +132,43 @@ public:
 				// 6. 结果输出检查
 				std::cout << "3. 正在保存结果..." << std::endl;
 
-						const int num_threads = std::thread::hardware_concurrency();
-						const int atoms_per_thread = n_sol / num_threads;
-						std::vector<std::string> thread_buffers(num_threads);
-						std::vector<std::jthread> workers;
+				const int num_threads = std::thread::hardware_concurrency();
+				const int atoms_per_thread = n_sol / num_threads;
+				std::vector<std::string> thread_buffers(num_threads);
+				std::vector<std::jthread> workers;
 
-						for (int t_id = 0; t_id < num_threads; ++t_id) {
-								int start_atom = t_id * atoms_per_thread;
-								int end_atom = (t_id == num_threads - 1) ? n_sol : (t_id + 1) * atoms_per_thread;
+				for (int t_id = 0; t_id < num_threads; ++t_id) {
+				int start_atom = t_id * atoms_per_thread;
+				int end_atom = (t_id == num_threads - 1) ? n_sol : (t_id + 1) * atoms_per_thread;
 
-								workers.emplace_back([&, t_id, start_atom, end_atom]() {
-										// 预估缓冲区大小以减少 realloc (每个 entry 约 40-60 字节)
-										std::string local_buf;
-										local_buf.reserve((end_atom - start_atom) * total_frames * 50);
+				workers.emplace_back([&, t_id, start_atom, end_atom]() {
+				// 预估缓冲区大小以减少 realloc (每个 entry 约 40-60 字节)
+				std::string local_buf;
+				local_buf.reserve((end_atom - start_atom) * total_frames * 50);
 
-										for (int i = start_atom; i < end_atom; ++i) {
-												int atom_actual_idx = o_indices[i];
-												for (int t = 0; t < total_frames; ++t) {
-														cl_float2 res_pair = results[t * n_sol + i];
+				for (int i = start_atom; i < end_atom; ++i) {
+				int atom_actual_idx = o_indices[i];
+				for (int t = 0; t < total_frames; ++t) {
+				cl_float2 res_pair = results[t * n_sol + i];
 
-														// 使用 std::format (C++20) 提供比 stringstream 更快的格式化速度
-														// 格式：atom_id,frame,hopping,dist
-														std::format_to(std::back_inserter(local_buf),
-																				 "{},{},{:.5f},{:.5f}\n",
-																				 atom_actual_idx, t, res_pair.s[0], res_pair.s[1]);
-												}
-										}
-										thread_buffers[t_id] = std::move(local_buf);
-								});
-						}
-						std::ofstream csv(cfg.output_file, std::ios::binary);
-						csv << "atom_id,frame,hopping_value,displacement(nm)\n";
-						workers.clear();
-						for (const auto& buf : thread_buffers) {
-								csv.write(buf.data(), buf.size());
-						}
-						std::cout << "保存完成！" << std::endl;
-		}
+				// 使用 std::format (C++20) 提供比 stringstream 更快的格式化速度
+				// 格式：atom_id,frame,hopping,dist
+				std::format_to(std::back_inserter(local_buf),
+				"{},{},{:.5f},{:.5f}\n",
+				atom_actual_idx, t, res_pair.s[0], res_pair.s[1]);
+				}
+			}
+			thread_buffers[t_id] = std::move(local_buf);
+		});
+	}
+	std::ofstream csv(cfg.output_file, std::ios::binary);
+	csv << "atom_id,frame,hopping_value,displacement(nm)\n";
+	workers.clear();
+	for (const auto& buf : thread_buffers) {
+		csv.write(buf.data(), buf.size());
+	}
+	std::cout << "保存完成！" << std::endl;
+}
 
 private:
 		Config cfg;
