@@ -7,6 +7,7 @@ find_package(OpenCLHeadersCpp REQUIRED)
 add_executable(hoping
     main.cpp
 )
+target_compile_features(hoping PRIVATE cxx_std_23)
 include_directories(${xdrfile_INCLUDE_DIRS})
 target_link_libraries(hoping
         xdrfile
