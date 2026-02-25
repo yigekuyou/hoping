@@ -152,8 +152,8 @@ public:
 				std::ofstream csv(cfg.output_file);
 				csv << "atom_id,frame,hopping_value\n";
 				int count = 0;
-				for(int t = hw; t < total_frames - hw; ++t) {
-						for(int i = 0; i < n_sol; ++i) {
+					for(int i = 0; i < n_sol; ++i) {
+							for(int t = hw; t < total_frames - hw; ++t) {
 								float val = results[t * n_sol + i];
 								if(val > cfg.threshold) {
 										csv << o_indices[i] << "," << t << "," << std::fixed << std::setprecision(5) << val << "\n";
