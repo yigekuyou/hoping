@@ -7,6 +7,9 @@
 #include <thread>
 #include <future>
 #include <format>
+#include <ranges>
+#include <string_view>
+#include <print>
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
@@ -23,25 +26,36 @@ public:
 		HoppingAnalyzer(Config c) : cfg(c) {}
 
 		std::vector<int> getOxygenIndices() {
-				std::vector<int> idx;
 				std::ifstream f(cfg.gro_file);
-				if (!f) return idx;
+				if (!f) {
+						std::println(stderr, "错误: 无法打开文件 {}", cfg.gro_file);
+						return {};
+				}
+
 				std::string line;
-				std::getline(f, line); std::getline(f, line);
+				// 跳过标题行和原子总数行
+				if (!std::getline(f, line) || !std::getline(f, line)) return {};
+
 				int total = std::stoi(line);
-				for (int i = 0; i < total; ++i) {
-						std::getline(f, line);
-						if (line.substr(5, 5).find("SOL") != std::string::npos &&
-								line.substr(10, 5).find("O") != std::string::npos) {
-								idx.push_back(i);
+				std::vector<int> idx;
+				idx.reserve(total);
+
+				for (int i : std::views::iota(1, total + 1)) {
+						if (!std::getline(f, line) || line.length() < 20) break;
+						std::string_view sv(line);
+						auto residue_name = sv.substr(5, 5);
+						auto atom_name = sv.substr(10, 5);
+
+						// 检查是否包含 R03 (残基) 和 O (原子)
+						if (residue_name.contains("R03") && atom_name.contains('O')) {
+								idx.push_back(i); //
 						}
 				}
 				return idx;
 		}
-
 		void execute() {
 				auto o_indices = getOxygenIndices();
-				if (o_indices.empty()) { std::cerr << "错误: 未找到 SOL O 原子\n"; return; }
+				if (o_indices.empty()) { std::cerr << "错误: 未找到 SOL OW 原子\n"; return; }
 				int n_sol = o_indices.size();
 
 				int natoms;
