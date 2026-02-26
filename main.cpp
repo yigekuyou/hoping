@@ -46,9 +46,9 @@ public:
 						auto residue_name = sv.substr(5, 5);
 						auto atom_name = sv.substr(10, 5);
 
-						// 检查是否包含 R03 (残基) 和 O (原子)
+						// 检查是否包含 SOL 和 O (原子)
 						if (residue_name.contains("R03") && atom_name.contains('O')) {
-								idx.push_back(i); //
+								idx.push_back(i);
 						}
 				}
 				return idx;
@@ -102,19 +102,38 @@ public:
 						// --- 计算 Hopping Value ---
 						float hopping_val = 0.0f;
 						if(t >= hw && t < (total_frames - hw)) {
-						float ta = 0.0f, tb = 0.0f, avg1 = 0.0f, avg2 = 0.0f;
-						for(int j=1; j<=hw; j++) {
-						avg1 += length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
-						avg2 += length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
+							float sum_d_W1 = 0.0f;
+							float sum_d_W2 = 0.0f;
+
+							// 预计算窗口内的位移模长均值
+							for(int j = 1; j <= hw; j++) {
+							// 窗口1的位移: |r(t-j) - r(0)|
+							float3 p_W1 = vload3(0, &coords[((t - j) * n_sol + i) * 3]);
+							sum_d_W1 += distance(p_W1, p_init);
+
+							// 窗口2的位移: |r(t+j-1) - r(0)|
+							float3 p_W2 = vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]);
+							sum_d_W2 += distance(p_W2, p_init);
 						}
-						avg1 /= hw; avg2 /= hw;
-						for(int j=1; j<=hw; j++) {
-						float v1 = length(vload3(0, &coords[((t - j) * n_sol + i) * 3]));
-						float v2 = length(vload3(0, &coords[((t + j) * n_sol + i) * 3]));
-						ta += (v1 - avg2) * (v1 - avg2);
-						tb += (v2 - avg1) * (v2 - avg1);
+						float avg_d_W1 = sum_d_W1 / hw;
+						float avg_d_W2 = sum_d_W2 / hw;
+
+						float var_W1_against_W2 = 0.0f;
+						float var_W2_against_W1 = 0.0f;
+
+						// 计算hopping
+						for(int j = 1; j <= hw; j++) {
+							float d_W1 = distance(vload3(0, &coords[((t - j) * n_sol + i) * 3]), p_init);
+							float d_W2 = distance(vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]), p_init);
+
+							float diff1 = d_W1 - avg_d_W2;
+							var_W1_against_W2 += diff1 * diff1;
+
+							float diff2 = d_W2 - avg_d_W1;
+							var_W2_against_W1 += diff2 * diff2;
 						}
-						hopping_val = native_sqrt((ta/hw) * (tb/hw));
+
+						hopping_val = native_sqrt((var_W1_against_W2 / hw) * (var_W2_against_W1 / hw));
 						}
 						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
