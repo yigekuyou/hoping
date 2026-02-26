@@ -101,40 +101,33 @@ public:
 						float dist = distance(p_curr, p_init);
 						// --- 计算 Hopping Value ---
 						float hopping_val = 0.0f;
+						float3 avg_A = (float3)(0.0f);
+						float3 avg_B = (float3)(0.0f);
 						if(t >= hw && t < (total_frames - hw)) {
-							float sum_d_W1 = 0.0f;
-							float sum_d_W2 = 0.0f;
-
-							// 预计算窗口内的位移模长均值
+							// 窗口 A (t-hw 到 t) 和 窗口 B (t 到 t+hw) 的平均位置
 							for(int j = 1; j <= hw; j++) {
-							// 窗口1的位移: |r(t-j) - r(0)|
-							float3 p_W1 = vload3(0, &coords[((t - j) * n_sol + i) * 3]);
-							sum_d_W1 += distance(p_W1, p_init);
+								avg_A += vload3(0, &coords[((t - j) * n_sol + i) * 3]);
+								avg_B += vload3(0, &coords[((t + j) * n_sol + i) * 3]);
+							}
+							avg_A /= (float)hw;
+							avg_B /= (float)hw;
+							float MS_A_to_B = 0.0f;
+							float MS_B_to_A = 0.0f;;
 
-							// 窗口2的位移: |r(t+j-1) - r(0)|
-							float3 p_W2 = vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]);
-							sum_d_W2 += distance(p_W2, p_init);
-						}
-						float avg_d_W1 = sum_d_W1 / hw;
-						float avg_d_W2 = sum_d_W2 / hw;
+							// 计算hopping
+							for(int j = 1; j <= hw; j++) {
+								float3 pos_A = vload3(0, &coords[((t - j) * n_sol + i) * 3]);
+								float3 pos_B = vload3(0, &coords[((t + j) * n_sol + i) * 3]);
 
-						float var_W1_against_W2 = 0.0f;
-						float var_W2_against_W1 = 0.0f;
+								float3 diffA = pos_A - avg_B;
+								MS_A_to_B += dot(diffA, diffA);
 
-						// 计算hopping
-						for(int j = 1; j <= hw; j++) {
-							float d_W1 = distance(vload3(0, &coords[((t - j) * n_sol + i) * 3]), p_init);
-							float d_W2 = distance(vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]), p_init);
+								float3 diffB = pos_B - avg_A;
+								MS_B_to_A += dot(diffB, diffB);
+							}
 
-							float diff1 = d_W1 - avg_d_W2;
-							var_W1_against_W2 += diff1 * diff1;
-
-							float diff2 = d_W2 - avg_d_W1;
-							var_W2_against_W1 += diff2 * diff2;
-						}
-
-						hopping_val = native_sqrt((var_W1_against_W2 / hw) * (var_W2_against_W1 / hw));
-						}
+							hopping_val = native_sqrt((MS_A_to_B / hw) * (MS_B_to_A / hw));
+							}
 						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
 				)";
@@ -175,7 +168,6 @@ public:
 				int end_atom = (t_id == num_threads - 1) ? n_sol : (t_id + 1) * atoms_per_thread;
 
 				workers.emplace_back([&, t_id, start_atom, end_atom]() {
-				// 预估缓冲区大小以减少 realloc (每个 entry 约 40-60 字节)
 				std::string local_buf;
 				local_buf.reserve((end_atom - start_atom) * total_frames * 50);
 
@@ -184,7 +176,6 @@ public:
 				for (int t = 0; t < total_frames; ++t) {
 				cl_float2 res_pair = results[t * n_sol + i];
 
-				// 使用 std::format (C++20) 提供比 stringstream 更快的格式化速度
 				// 格式：atom_id,frame,hopping,dist
 				std::format_to(std::back_inserter(local_buf),
 				"{},{},{:.5f},{:.5f}\n",
