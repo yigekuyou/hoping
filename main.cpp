@@ -107,7 +107,7 @@ public:
 							// 窗口 A (t-hw 到 t) 和 窗口 B (t 到 t+hw) 的平均位置
 							for(int j = 1; j <= hw; j++) {
 								avg_A += vload3(0, &coords[((t - j) * n_sol + i) * 3]);
-								avg_B += vload3(0, &coords[((t + j) * n_sol + i) * 3]);
+								avg_B += vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]);
 							}
 							avg_A /= (float)hw;
 							avg_B /= (float)hw;
@@ -117,7 +117,7 @@ public:
 							// 计算hopping
 							for(int j = 1; j <= hw; j++) {
 								float3 pos_A = vload3(0, &coords[((t - j) * n_sol + i) * 3]);
-								float3 pos_B = vload3(0, &coords[((t + j) * n_sol + i) * 3]);
+								float3 pos_B = vload3(0, &coords[((t + j - 1) * n_sol + i) * 3]);
 
 								float3 diffA = pos_A - avg_B;
 								MS_A_to_B += dot(diffA, diffA);
