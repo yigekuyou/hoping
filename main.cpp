@@ -11,7 +11,7 @@ extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
 
-class HoppingAnalyzerV3 {
+class HoppingAnalyzer {
 public:
 		struct Config {
 				std::string gro_file;
@@ -20,7 +20,7 @@ public:
 				int tw_frames = 20;
 		};
 
-		HoppingAnalyzerV3(Config c) : cfg(c) {}
+		HoppingAnalyzer(Config c) : cfg(c) {}
 
 		std::vector<int> getOxygenIndices() {
 				std::vector<int> idx;
@@ -179,12 +179,12 @@ int main(int argc, char** argv) {
 				std::cout << "用法: " << argv[0] << " <system.gro> <traj.xtc> [output.csv]\n";
 				return 1;
 		}
-		HoppingAnalyzerV3::Config cfg;
+		HoppingAnalyzer::Config cfg;
 		cfg.gro_file = argv[1];
 		cfg.xtc_file = argv[2];
 		if (argc >= 4) cfg.output_file = argv[3];
 
-		HoppingAnalyzerV3 analyzer(cfg);
+		HoppingAnalyzer analyzer(cfg);
 		analyzer.execute();
 		return 0;
 }
