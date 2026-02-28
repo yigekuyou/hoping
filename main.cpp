@@ -10,6 +10,7 @@
 #include <ranges>
 #include <string_view>
 #include <print>
+#include <omp.h>
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
@@ -33,7 +34,7 @@ public:
 				}
 
 				std::string line;
-				// 跳过标题行和原子总数行
+				// 跳过标题行和读取原子总数行
 				if (!std::getline(f, line) || !std::getline(f, line)) return {};
 
 				int total = std::stoi(line);
@@ -157,21 +158,19 @@ public:
 
 				// 6. 结果输出检查
 				std::cout << "3. 正在保存结果..." << std::endl;
-
-				const int num_threads = std::thread::hardware_concurrency();
-				const int atoms_per_thread = n_sol / num_threads;
+				std::ofstream csv(cfg.output_file, std::ios::binary);
+				csv << "atom_id,frame,hopping_value,displacement(nm)\n";
+				int num_threads = omp_get_max_threads();
 				std::vector<std::string> thread_buffers(num_threads);
-				std::vector<std::jthread> workers;
+#pragma omp parallel
+{
+		int t_id = omp_get_thread_num();
+		std::string& local_buf = thread_buffers[t_id];
 
-				for (int t_id = 0; t_id < num_threads; ++t_id) {
-				int start_atom = t_id * atoms_per_thread;
-				int end_atom = (t_id == num_threads - 1) ? n_sol : (t_id + 1) * atoms_per_thread;
+		local_buf.reserve((n_sol / num_threads) * total_frames * 50);
 
-				workers.emplace_back([&, t_id, start_atom, end_atom]() {
-				std::string local_buf;
-				local_buf.reserve((end_atom - start_atom) * total_frames * 50);
-
-				for (int i = start_atom; i < end_atom; ++i) {
+		#pragma omp for schedule(dynamic)
+		for (int i = 0; i < n_sol; ++i) {
 				int atom_actual_idx = o_indices[i];
 				for (int t = 0; t < total_frames; ++t) {
 				cl_float2 res_pair = results[t * n_sol + i];
@@ -181,13 +180,9 @@ public:
 				"{},{},{:.5f},{:.5f}\n",
 				atom_actual_idx, t, res_pair.s[0], res_pair.s[1]);
 				}
-			}
-			thread_buffers[t_id] = std::move(local_buf);
-		});
-	}
-	std::ofstream csv(cfg.output_file, std::ios::binary);
-	csv << "atom_id,frame,hopping_value,displacement(nm)\n";
-	workers.clear();
+		}
+}
+
 	for (const auto& buf : thread_buffers) {
 		csv.write(buf.data(), buf.size());
 	}
