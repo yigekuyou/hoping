@@ -3,7 +3,7 @@ project(hoping LANGUAGES CXX)
 
 find_package(xdrfile REQUIRED)
 find_package(OpenCLHeadersCpp REQUIRED)
-
+find_package(OpenMP REQUIRED)
 add_executable(hoping
     main.cpp
 )
@@ -13,6 +13,7 @@ target_link_libraries(hoping
         xdrfile
         OpenCL
         m
+	OpenMP::OpenMP_CXX
 )
 
 include(GNUInstallDirs)
