@@ -176,7 +176,7 @@ public:
 
 				std::cout << "3. 正在保存结果..." << std::endl;
 				std::ofstream csv(cfg.output_file, std::ios::binary);
-				csv << "原子ID,帧号,跳跃值(Hopping),位移(nm),\n";
+				csv << "原子ID,帧号,跳跃值(Hopping),位移(nm)\n";
 				int num_threads = omp_get_max_threads();
 				std::vector<std::string> thread_buffers(num_threads);
 #pragma omp parallel
