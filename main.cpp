@@ -89,35 +89,30 @@ public:
 								qCritical() << "错误: 无法读取 XTC 原子总数";
 								return;
 				}
-				QVector<float> all_coords;
 				std::vector<rvec> coords(natoms);
 				matrix box; float time, prec; int step;
-				int total_frames = 0;
 
 				qInfo() << "1. 正在读取轨迹...";;
-				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
-						qDebug().nospace() << "帧: " << total_frames
-																	 << " | 时间: " << time << " ps"
-																	 << " | 首原子坐标: (" << coords[0][0] << "," << coords[0][1] << "," << coords[0][2] << ")";
-								// 提取指定索引的原子坐标
-						for(int idx : o_indices) {
-								all_coords.push_back(coords[idx][0]*10);
-								all_coords.push_back(coords[idx][1]*10);
-								all_coords.push_back(coords[idx][2]*10);
+				int total_frames = 0;
+						QVector<float> time_steps;
+						{
+								XDRFILE* xd = xdrfile_open(xtc_c, "r");
+								matrix box; float time, prec; int step;
+								std::vector<rvec> dummy_coords(natoms);
+								while(read_xtc(xd, natoms, &step, &time, box, dummy_coords.data(), &prec) == 0) {
+										time_steps.push_back(time);
+										total_frames++;
+								}
+								xdrfile_close(xd);
 						}
-						total_frames++;
-				}
-				xdrfile_close(xd);
-				if (total_frames == 0) {
-						qCritical() << "错误: 轨迹文件中没有读入任何帧";
-						return;
-				}
-				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
-													<< n_sol << " 个计算原子/帧 (总坐标数: " << all_coords.size() << ")";
-				// 2. 环境初始化
-				cl::Context context(CL_DEVICE_TYPE_GPU);
-				cl::CommandQueue queue(context, context.getInfo<CL_CONTEXT_DEVICES>()[0]);
-
+						if (total_frames == 0) {
+								qCritical() << "错误: 轨迹文件中没有读入任何帧";
+								return;
+						}
+						size_t coords_size = (size_t)total_frames * n_sol * 3 * sizeof(float);
+						size_t res_size = (size_t)total_frames * n_sol * sizeof(cl_float2);
+						cl::Context context(CL_DEVICE_TYPE_GPU);
+						cl::CommandQueue queue(context, context.getInfo<CL_CONTEXT_DEVICES>()[0]);
 				// 3. Kernel
 				std::string hopping_src = R"(
 						__kernel void calc_hopping_full(__global const float* coords,
@@ -177,8 +172,10 @@ public:
 								cl::Kernel k_optics(prog_optics, "calc_time_core_dist");
 */
 				// 4. 显存分配
-				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, all_coords.size() * sizeof(float), all_coords.data());
-				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(cl_float2));
+				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, coords_size);
+				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_ALLOC_HOST_PTR, res_size);
+				float* host_coords_ptr = (float*)queue.enqueueMapBuffer(
+								buf_coords, CL_TRUE, CL_MAP_WRITE, 0, coords_size);
 //				cl::Buffer buf_core(context, CL_MEM_WRITE_ONLY |CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(float));
 				// 5. 执行
 				k_hop.setArg(0, buf_coords);
@@ -192,13 +189,36 @@ public:
 				k_optics.setArg(2, n_sol);
 				k_optics.setArg(3, total_frames);
 */
+				qint64 frames =0;
+				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
+						qDebug().nospace() << "帧: " << frames
+																	 << " | 时间: " << time << " ps"
+																	 << " | 首原子坐标: (" << coords[0][0] << "," << coords[0][1] << "," << coords[0][2] << ")";
+								// 提取指定索引的原子坐标
+						float* frame_base = host_coords_ptr + (size_t)frames * n_sol * 3;
+						for (int i = 0; i < n_sol; ++i) {
+								int idx = o_indices[i];
+								frame_base[i * 3 + 0] = coords[idx][0] * 10.0f;
+								frame_base[i * 3 + 1] = coords[idx][1] * 10.0f;
+								frame_base[i * 3 + 2] = coords[idx][2] * 10.0f;
+						}
+						frames++;
+				}
+				xdrfile_close(xd);
+queue.enqueueUnmapMemObject(buf_coords, host_coords_ptr);
+
+				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
+													<< n_sol << " 个计算原子/帧 (总坐标数: " << total_frames * n_sol *3 << ")";
+
 				qDebug() << "2. GPU 正在运行计算...";
 				cl_int hop_err = queue.enqueueNDRangeKernel(k_hop, cl::NullRange, cl::NDRange(n_sol, total_frames));
 				if (hop_err != CL_SUCCESS) { std::cerr << "k_hop运行错误代码: " << hop_err << std::endl; return; }
 //				cl_int optics_err = queue.enqueueNDRangeKernel(k_optics, cl::NullRange, cl::NDRange(n_sol, total_frames));
 //				if (optics_err != CL_SUCCESS) { std::cerr << "k_optics运行错误代码: " << optics_err << std::endl; return; }
 						QVector<cl_float2> results(n_sol * total_frames);
-						queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(cl_float2), results.data());
+						cl_float2* host_res_ptr = (cl_float2*)queue.enqueueMapBuffer(
+										buf_res, CL_TRUE, CL_MAP_READ, 0, res_size);
+
 						qDebug() << "3. 正在保存结果...";
 						// 准备输出文件
 						QFile file(cfg.output_file);
@@ -214,11 +234,11 @@ public:
 						// 并行映射处理：将每个原子的所有帧转换为字符串
 						auto mapFunction = [&](int i) -> QString {
 								QString block;
-								block.reserve(total_frames * 50); // 预分配内存减少开销
+								block.reserve(total_frames * 64); // 预分配内存减少开销
 								int atom_actual_idx = o_indices[i];
 
 								for (int t = 0; t < total_frames; ++t) {
-										cl_float2 res_pair = results[t * n_sol + i];
+										cl_float2 res_pair = host_res_ptr[t * n_sol + i];
 										// 格式化
 										block.append(QString("%1,%2,%3,%4\n")
 																 .arg(atom_actual_idx)
