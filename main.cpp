@@ -30,9 +30,9 @@ extern "C" {
 class HoppingAnalyzer {
 public:
 		struct Config {
-				std::string gro_file;
-				std::string xtc_file;
-				std::string output_file = "results.csv";
+				QString gro_file;
+				QString xtc_file;
+				QString output_file = "results.csv";
 				int tw_frames = 20;
 		};
 
@@ -40,7 +40,7 @@ public:
 
 		QVector<int> getOxygenIndices() {
 				//使用 QFile 打开文件
-				QFile file(QString::fromStdString(cfg.gro_file));
+				QFile file(cfg.gro_file);
 				if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
 						qCritical() << "错误: 无法打开文件" << file.fileName();
 						return {};
@@ -83,7 +83,7 @@ public:
 				int hw = cfg.tw_frames / 2;
 				int natoms= 0;
 
-				QByteArray xtcPath = QString::fromStdString(cfg.xtc_file).toLocal8Bit();
+				QByteArray xtcPath = cfg.xtc_file.toLocal8Bit();
 				char* xtc_c = xtcPath.data();
 				XDRFILE* xd = xdrfile_open(xtc_c, "r");
 				if (!xd) {
@@ -207,7 +207,7 @@ public:
 						queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(cl_float2), results.data());
 						qDebug() << "3. 正在保存结果...";
 						// 准备输出文件
-						QFile file(QString::fromStdString(cfg.output_file));
+						QFile file(cfg.output_file);
 						if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 								qCritical() << "无法打开文件进行写入";
 								return;
