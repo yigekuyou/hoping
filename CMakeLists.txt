@@ -4,12 +4,12 @@ project(hoping LANGUAGES CXX)
 find_package(xdrfile REQUIRED)
 find_package(OpenCLHeadersCpp REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent)
-add_executable(hoping
+add_executable(${PROJECT_NAME}
     main.cpp
 )
-target_compile_features(hoping PRIVATE cxx_std_23)
+target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 include_directories(${xdrfile_INCLUDE_DIRS})
-target_link_libraries(hoping
+target_link_libraries(${PROJECT_NAME}
         xdrfile
         OpenCL
         m
@@ -18,7 +18,9 @@ target_link_libraries(hoping
 )
 
 include(GNUInstallDirs)
-
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    $<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG_OUTPUT>
+)
 install(TARGETS hoping
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

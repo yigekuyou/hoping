@@ -80,27 +80,21 @@ public:
 
 				QByteArray xtcPath = cfg.xtc_file.toLocal8Bit();
 				char* xtc_c = xtcPath.data();
-				XDRFILE* xd = xdrfile_open(xtc_c, "r");
-				if (!xd) {
-						qCritical() << "错误: 无法打开 XTC 文件";
-						return;
-				}
-				if (read_xtc_natoms(xtc_c, &natoms) != 0) {
-								qCritical() << "错误: 无法读取 XTC 原子总数";
-								return;
-				}
-				std::vector<rvec> coords(natoms);
-				matrix box; float time, prec; int step;
-
-				qInfo() << "1. 正在读取轨迹...";;
 				int total_frames = 0;
-						QVector<float> time_steps;
 						{
 								XDRFILE* xd = xdrfile_open(xtc_c, "r");
+								if (!xd) {
+										qCritical() << "错误: 无法打开 XTC 文件";
+										return;
+								}
+								if (read_xtc_natoms(xtc_c, &natoms) != 0) {
+												qCritical() << "错误: 无法读取 XTC 原子总数";
+												return;
+								}
+								qInfo() << "1. 正在读取轨迹...";;
 								matrix box; float time, prec; int step;
 								std::vector<rvec> dummy_coords(natoms);
 								while(read_xtc(xd, natoms, &step, &time, box, dummy_coords.data(), &prec) == 0) {
-										time_steps.push_back(time);
 										total_frames++;
 								}
 								xdrfile_close(xd);
@@ -189,12 +183,12 @@ public:
 				k_optics.setArg(2, n_sol);
 				k_optics.setArg(3, total_frames);
 */
+				{
 				qint64 frames =0;
+				XDRFILE* xd = xdrfile_open(xtc_c, "r");
+				std::vector<rvec> coords(natoms);
+				matrix box; float time, prec; int step;
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
-						qDebug().nospace() << "帧: " << frames
-																	 << " | 时间: " << time << " ps"
-																	 << " | 首原子坐标: (" << coords[0][0] << "," << coords[0][1] << "," << coords[0][2] << ")";
-								// 提取指定索引的原子坐标
 						float* frame_base = host_coords_ptr + (size_t)frames * n_sol * 3;
 						for (int i = 0; i < n_sol; ++i) {
 								int idx = o_indices[i];
@@ -209,7 +203,7 @@ public:
 
 				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
 													<< n_sol << " 个计算原子/帧 (总坐标数: " << total_frames * n_sol *3 << ")";
-
+				}
 				qDebug() << "2. GPU 正在运行计算...";
 				cl_int hop_err = queue.enqueueNDRangeKernel(k_hop, cl::NullRange, cl::NDRange(n_sol, total_frames));
 				if (hop_err != CL_SUCCESS) { std::cerr << "k_hop运行错误代码: " << hop_err << std::endl; return; }
