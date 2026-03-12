@@ -10,14 +10,16 @@
 #include <ranges>
 #include <string_view>
 #include <print>
-#include <omp.h>
 #include <QDebug>
 #include <QString>
 #include <QFile>
 #include <QTextStream>
 #include <QVector>
 #include <QStringView>
-#include <QDebug>
+#include <QFile>
+#include <QTextStream>
+#include <QtConcurrent>
+#include <QFuture>
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
@@ -100,9 +102,9 @@ public:
 				qInfo() << "1. 正在读取轨迹...";;
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
 						qDebug()<< "Processing Frame:" << total_frames
-										<< "First Atom X:" << coords[0][0]
-										<< "First Atom Y:" << coords[0][1]
-										<< "First Atom Z:" << coords[0][2]
+										<< "First Atom:" << coords[0][0]
+										<< "," << coords[0][1]
+										<<"," << coords[0][2]
 										<< "Time:" << time << "ps";
 						for(int idx : o_indices) {
 								all_coords.push_back(coords[idx][0]*10);
@@ -117,7 +119,7 @@ public:
 						return;
 				}
 				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
-													<< n_sol << " 个氧原子/帧 (总坐标数: " << all_coords.size() << ")";
+													<< n_sol << " 个计算原子/帧 (总坐标数: " << all_coords.size() << ")";
 				// 2. 环境初始化
 				cl::Context context(CL_DEVICE_TYPE_GPU);
 				cl::CommandQueue queue(context, context.getInfo<CL_CONTEXT_DEVICES>()[0]);
@@ -196,47 +198,54 @@ public:
 				k_optics.setArg(2, n_sol);
 				k_optics.setArg(3, total_frames);
 */
-				std::cout << "2. GPU 正在运行计算..." << std::endl;
+				qDebug() << "2. GPU 正在运行计算...";
 				cl_int hop_err = queue.enqueueNDRangeKernel(k_hop, cl::NullRange, cl::NDRange(n_sol, total_frames));
 				if (hop_err != CL_SUCCESS) { std::cerr << "k_hop运行错误代码: " << hop_err << std::endl; return; }
 //				cl_int optics_err = queue.enqueueNDRangeKernel(k_optics, cl::NullRange, cl::NDRange(n_sol, total_frames));
 //				if (optics_err != CL_SUCCESS) { std::cerr << "k_optics运行错误代码: " << optics_err << std::endl; return; }
-				std::vector<cl_float2> results(n_sol * total_frames);
-				std::vector<float> c_data(n_sol * total_frames);
-				queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(cl_float2), results.data());
-//				queue.enqueueReadBuffer(buf_core, CL_TRUE, 0, c_data.size() * sizeof(float), c_data.data());
+						QVector<cl_float2> results(n_sol * total_frames);
+						queue.enqueueReadBuffer(buf_res, CL_TRUE, 0, results.size() * sizeof(cl_float2), results.data());
+						qDebug() << "3. 正在保存结果...";
+						// 准备输出文件
+						QFile file(QString::fromStdString(cfg.output_file));
+						if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+								qCritical() << "无法打开文件进行写入";
+								return;
+						}
+						QTextStream out(&file);
+						out << "原子ID,帧号,跳跃值(Hopping),位移(nm)\n";
+						QVector<int> indices(n_sol);
+						std::iota(indices.begin(), indices.end(), 0);
 
-				std::cout << "3. 正在保存结果..." << std::endl;
-				std::ofstream csv(cfg.output_file, std::ios::binary);
-				csv << "原子ID,帧号,跳跃值(Hopping),位移(nm)\n";
-				int num_threads = omp_get_max_threads();
-				std::vector<std::string> thread_buffers(num_threads);
-#pragma omp parallel
-{
-		int t_id = omp_get_thread_num();
-		std::string& local_buf = thread_buffers[t_id];
+						// 并行映射处理：将每个原子的所有帧转换为字符串
+						auto mapFunction = [&](int i) -> QString {
+								QString block;
+								block.reserve(total_frames * 50); // 预分配内存减少开销
+								int atom_actual_idx = o_indices[i];
 
-		local_buf.reserve((n_sol / num_threads) * total_frames * 50);
+								for (int t = 0; t < total_frames; ++t) {
+										cl_float2 res_pair = results[t * n_sol + i];
+										// 使用 QString::arg 或 QTextStream 格式化
+										block.append(QString("%1,%2,%3,%4\n")
+																 .arg(atom_actual_idx)
+																 .arg(t)
+																 .arg(res_pair.s[0], 0, 'f', 5)
+																 .arg(res_pair.s[1], 0, 'f', 5));
+								}
+								return block;
+						};
 
-		#pragma omp for schedule(static)
-		for (int i = 0; i < n_sol; ++i) {
-				int atom_actual_idx = o_indices[i];
-				for (int t = 0; t < total_frames; ++t) {
-				cl_float2 res_pair = results[t * n_sol + i];
-				// 格式：atom_id,frame,hopping
-				std::format_to(std::back_inserter(local_buf),
-				"{},{},{:.5f},{:.5f}\n",
-				atom_actual_idx, t, res_pair.s[0], res_pair.s[1]);
+						// 执行并行计算并阻塞等待结果
+						QList<QString> resultBlocks = QtConcurrent::blockingMapped<QList<QString>>(indices, mapFunction);
+
+						// 将结果写入文件
+						for (const QString& block : resultBlocks) {
+								out << block;
+						}
+
+						file.close();
+						qDebug() << "保存完成！";
 				}
-		}
-}
-
-	for (const auto& buf : thread_buffers) {
-		csv.write(buf.data(), buf.size());
-	}
-	std::cout << "保存完成！" << std::endl;
-}
-
 private:
 		Config cfg;
 };

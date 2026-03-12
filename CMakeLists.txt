@@ -3,8 +3,7 @@ project(hoping LANGUAGES CXX)
 
 find_package(xdrfile REQUIRED)
 find_package(OpenCLHeadersCpp REQUIRED)
-find_package(OpenMP REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent)
 add_executable(hoping
     main.cpp
 )
@@ -15,7 +14,7 @@ target_link_libraries(hoping
         OpenCL
         m
         Qt6::Core
-	OpenMP::OpenMP_CXX
+        Qt6::Concurrent
 )
 
 include(GNUInstallDirs)
