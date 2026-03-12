@@ -97,18 +97,17 @@ public:
 								qCritical() << "错误: 无法读取 XTC 原子总数";
 								return;
 				}
-				std::vector<float> all_coords;
+				QVector<float> all_coords;
 				std::vector<rvec> coords(natoms);
 				matrix box; float time, prec; int step;
 				int total_frames = 0;
 
 				qInfo() << "1. 正在读取轨迹...";;
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
-						qDebug()<< "Processing Frame:" << total_frames
-										<< "First Atom:" << coords[0][0]
-										<< "," << coords[0][1]
-										<<"," << coords[0][2]
-										<< "Time:" << time << "ps";
+						qDebug().nospace() << "帧: " << total_frames
+																	 << " | 时间: " << time << " ps"
+																	 << " | 首原子坐标: (" << coords[0][0] << "," << coords[0][1] << "," << coords[0][2] << ")";
+								// 提取指定索引的原子坐标
 						for(int idx : o_indices) {
 								all_coords.push_back(coords[idx][0]*10);
 								all_coords.push_back(coords[idx][1]*10);
@@ -237,7 +236,6 @@ public:
 								}
 								return block;
 						};
-
 						// 执行并行计算并阻塞等待结果
 						QList<QString> resultBlocks = QtConcurrent::blockingMapped<QList<QString>>(indices, mapFunction);
 
