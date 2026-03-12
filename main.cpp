@@ -11,6 +11,13 @@
 #include <string_view>
 #include <print>
 #include <omp.h>
+#include <QDebug>
+#include <QString>
+#include <QFile>
+#include <QTextStream>
+#include <QVector>
+#include <QStringView>
+#include <QDebug>
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
@@ -29,63 +36,88 @@ public:
 
 		HoppingAnalyzer(Config c) : cfg(c) {}
 
-		std::vector<int> getOxygenIndices() {
-				std::ifstream f(cfg.gro_file);
-				if (!f) {
-						std::println(stderr, "错误: 无法打开文件 {}", cfg.gro_file);
+		QVector<int> getOxygenIndices() {
+				//使用 QFile 打开文件
+				QFile file(QString::fromStdString(cfg.gro_file));
+				if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+						qCritical() << "错误: 无法打开文件" << file.fileName();
 						return {};
 				}
-
-				std::string line;
-				// 跳过标题行和读取原子总数行
-				if (!std::getline(f, line) || !std::getline(f, line)) return {};
-
-				int total = std::stoi(line);
-				std::vector<int> idx;
+				QTextStream in(&file);
+				//读取前两行
+				QString line = in.readLine(); // 标题行
+				if (line.isNull()) return {};
+				line = in.readLine(); // 原子总数行
+				if (line.isNull()) return {};
+				bool ok;
+				int total = line.trimmed().toInt(&ok);
+				if (!ok) return {};
+				QVector<int> idx;
 				idx.reserve(total);
-
-				for (int i : std::views::iota(0, total)) {
-						if (!std::getline(f, line) || line.length() < 20) break;
-						std::string_view sv(line);
-						auto residue_name = sv.substr(5, 5);
-						auto atom_name = sv.substr(10, 5);
-
-						// 检查是否包含 SOL 和 O (原子)
-						if (residue_name.contains("R03") && atom_name.contains('O')) {
+				//循环读取原子信息
+				for (int i = 0; i < total; ++i) {
+						line = in.readLine();
+						if (line.isNull() || line.length() < 20) break;
+						// GRO 格式固定列宽：
+						// 残基序号(5位), 残基名(5位), 原子名(5位), 原子序号(5位)...
+						QString residueName = line.mid(5, 5).trimmed();
+						QString atomName = line.mid(10, 5).trimmed();
+						// 调试输出：检查实际裁剪后的字符串
+						 qDebug() << "Index:" << i << "Res:" << residueName << "Atom:" << atomName;
+						// 匹配
+						if (residueName == "R03" && atomName.startsWith('O')) {
 								idx.push_back(i);
 						}
 				}
 				return idx;
 		}
 		void execute() {
-				auto o_indices = getOxygenIndices();
-				if (o_indices.empty()) { std::cerr << "错误: 未找到 SOL OW 原子\n"; return; }
+			QVector<int> o_indices = getOxygenIndices();
+			if (o_indices.isEmpty()) {
+					qCritical() << "错误: 未找到符合条件的原子";
+					return;
+			}
 				int n_sol = o_indices.size();
 				int hw = cfg.tw_frames / 2;
-				int natoms;
+				int natoms= 0;
 
-				char* xtc_c = const_cast<char*>(cfg.xtc_file.c_str());
-				if (read_xtc_natoms(xtc_c, &natoms) != 0) { std::cerr << "错误: 无法读取 XTC 文件\n"; return; }
-
+				QByteArray xtcPath = QString::fromStdString(cfg.xtc_file).toLocal8Bit();
+				char* xtc_c = xtcPath.data();
 				XDRFILE* xd = xdrfile_open(xtc_c, "r");
+				if (!xd) {
+						qCritical() << "错误: 无法打开 XTC 文件";
+						return;
+				}
+				if (read_xtc_natoms(xtc_c, &natoms) != 0) {
+								qCritical() << "错误: 无法读取 XTC 原子总数";
+								return;
+				}
 				std::vector<float> all_coords;
 				std::vector<rvec> coords(natoms);
 				matrix box; float time, prec; int step;
 				int total_frames = 0;
 
-				std::cout << "1. 正在读取轨迹..." << std::endl;
+				qInfo() << "1. 正在读取轨迹...";;
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
+						qDebug()<< "Processing Frame:" << total_frames
+										<< "First Atom X:" << coords[0][0]
+										<< "First Atom Y:" << coords[0][1]
+										<< "First Atom Z:" << coords[0][2]
+										<< "Time:" << time << "ps";
 						for(int idx : o_indices) {
-								all_coords.push_back(coords[idx][0]);
-								all_coords.push_back(coords[idx][1]);
-								all_coords.push_back(coords[idx][2]);
+								all_coords.push_back(coords[idx][0]*10);
+								all_coords.push_back(coords[idx][1]*10);
+								all_coords.push_back(coords[idx][2]*10);
 						}
 						total_frames++;
 				}
 				xdrfile_close(xd);
-				if (total_frames == 0) { std::cerr << "错误: 轨迹中没有帧\n"; return; }
-				std::cout << "载入完成: " << total_frames << " 帧, " << n_sol << " 原子/帧" << std::endl;
-
+				if (total_frames == 0) {
+						qCritical() << "错误: 轨迹文件中没有读入任何帧";
+						return;
+				}
+				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
+													<< n_sol << " 个氧原子/帧 (总坐标数: " << all_coords.size() << ")";
 				// 2. 环境初始化
 				cl::Context context(CL_DEVICE_TYPE_GPU);
 				cl::CommandQueue queue(context, context.getInfo<CL_CONTEXT_DEVICES>()[0]);
@@ -131,7 +163,7 @@ public:
 								MS_B_to_A += dot(diffB, diffB);
 							}
 
-							hopping_val = native_sqrt((MS_A_to_B / hw) * (MS_B_to_A / hw));
+							hopping_val = native_sqrt(MS_A_to_B  * MS_B_to_A );
 							}
 						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
@@ -186,7 +218,7 @@ public:
 
 		local_buf.reserve((n_sol / num_threads) * total_frames * 50);
 
-		#pragma omp for schedule(dynamic)
+		#pragma omp for schedule(static)
 		for (int i = 0; i < n_sol; ++i) {
 				int atom_actual_idx = o_indices[i];
 				for (int t = 0; t < total_frames; ++t) {
