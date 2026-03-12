@@ -1,35 +1,27 @@
 #define CL_HPP_TARGET_OPENCL_VERSION 300
 #include <CL/opencl.hpp>
+
+// Qt Core
+#include <QCoreApplication>
+#include <QDebug>
+#include <QFile>
+#include <QTextStream>
+#include <QString>
+#include <QVector>
+#include <QStringList>
+#include <QtConcurrent>
+
+// Standard Library
 #include <iostream>
 #include <vector>
 #include <string>
-#include <fstream>
-#include <thread>
-#include <future>
-#include <format>
-#include <ranges>
-#include <string_view>
-#include <print>
-#include <QDebug>
-#include <QString>
-#include <QFile>
-#include <QTextStream>
-#include <QVector>
-#include <QStringView>
-#include <QFile>
-#include <QTextStream>
-#include <QtConcurrent>
-#include <QFuture>
-#include <QCoreApplication>
-#include <QStringList>
-#include <QFileInfo>
+#include <algorithm>
+#include <numeric>
+
+// External C Library
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
-
-#include <algorithm>
-#include <set>
-
 class HoppingAnalyzer {
 public:
 		struct Config {
