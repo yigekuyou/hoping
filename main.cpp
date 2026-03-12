@@ -20,6 +20,9 @@
 #include <QTextStream>
 #include <QtConcurrent>
 #include <QFuture>
+#include <QCoreApplication>
+#include <QStringList>
+#include <QFileInfo>
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
 }
@@ -225,7 +228,7 @@ public:
 
 								for (int t = 0; t < total_frames; ++t) {
 										cl_float2 res_pair = results[t * n_sol + i];
-										// 使用 QString::arg 或 QTextStream 格式化
+										// 格式化
 										block.append(QString("%1,%2,%3,%4\n")
 																 .arg(atom_actual_idx)
 																 .arg(t)
@@ -251,15 +254,31 @@ private:
 };
 
 int main(int argc, char** argv) {
-		if (argc < 3) {
-				std::cout << "用法: " << argv[0] << " <system.gro> <traj.xtc> [output.csv]\n";
+		//初始化 QCoreApplication，它会自动处理命令行参数的编码转换
+		QCoreApplication a(argc, argv);
+
+		//获取参数列表（包含程序名）
+		QStringList args = QCoreApplication::arguments();
+
+		if (args.size() < 3) {
+				// 使用 qInfo
+				std::cout << "用法: " << args.at(0).toLocal8Bit().constData()
+									<< " <system.gro> <traj.xtc> [output.csv]" << std::endl;
 				return 1;
 		}
-		HoppingAnalyzer::Config cfg;
-		cfg.gro_file = argv[1];
-		cfg.xtc_file = argv[2];
-		if (argc >= 4) cfg.output_file = argv[3];
 
+		//填充配置
+		HoppingAnalyzer::Config cfg;
+
+		// Qt 的 arguments 已经处理好了编码，直接赋值给 QString
+		cfg.gro_file = args.at(1);
+		cfg.xtc_file = args.at(2);
+
+		if (args.size() >= 4) {
+				cfg.output_file = args.at(3);
+		}
+
+		// 4. 逻辑执行
 		HoppingAnalyzer analyzer(cfg);
 		analyzer.execute();
 		return 0;
