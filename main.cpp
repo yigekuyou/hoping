@@ -205,7 +205,7 @@ public:
 						frames++;
 				}
 				xdrfile_close(xd);
-queue.enqueueUnmapMemObject(buf_coords, host_coords_ptr);
+				queue.enqueueUnmapMemObject(buf_coords, host_coords_ptr);
 
 				qInfo().nospace() << "载入完成: " << total_frames << " 帧, "
 													<< n_sol << " 个计算原子/帧 (总坐标数: " << total_frames * n_sol *3 << ")";
@@ -215,7 +215,6 @@ queue.enqueueUnmapMemObject(buf_coords, host_coords_ptr);
 				if (hop_err != CL_SUCCESS) { std::cerr << "k_hop运行错误代码: " << hop_err << std::endl; return; }
 //				cl_int optics_err = queue.enqueueNDRangeKernel(k_optics, cl::NullRange, cl::NDRange(n_sol, total_frames));
 //				if (optics_err != CL_SUCCESS) { std::cerr << "k_optics运行错误代码: " << optics_err << std::endl; return; }
-						QVector<cl_float2> results(n_sol * total_frames);
 						cl_float2* host_res_ptr = (cl_float2*)queue.enqueueMapBuffer(
 										buf_res, CL_TRUE, CL_MAP_READ, 0, res_size);
 
@@ -250,7 +249,7 @@ queue.enqueueUnmapMemObject(buf_coords, host_coords_ptr);
 						};
 						// 执行并行计算并阻塞等待结果
 						QList<QString> resultBlocks = QtConcurrent::blockingMapped<QList<QString>>(indices, mapFunction);
-
+						queue.enqueueUnmapMemObject(buf_res, host_res_ptr);
 						// 将结果写入文件
 						for (const QString& block : resultBlocks) {
 								out << block;
