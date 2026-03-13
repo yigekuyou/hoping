@@ -17,7 +17,8 @@
 #include <string>
 #include <algorithm>
 #include <numeric>
-
+//OpenMP
+#include <omp.h>
 // External C Library
 extern "C" {
 		#include "xdrfile/xdrfile_xtc.h"
@@ -189,9 +190,10 @@ public:
 				matrix box; float time, prec; int step;
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
 						float* frame_base = host_coords_ptr + (size_t)frames * n_sol * 3;
+						#pragma omp parallel for schedule(static)
 						for (int i = 0; i < n_sol; ++i) {
 										int atom_idx = o_indices[i];
-										// 核心改变：将当前帧的数据存放到该原子对应的轨迹区间
+										// 将当前帧的数据存放到该原子对应的轨迹区间
 										// 存储格式：[Atom 0: T0,T1,T2...][Atom 1: T0,T1,T2...]
 										size_t offset = ((size_t)i * total_frames + frames) * 3;
 										host_coords_ptr[offset + 0] = coords[atom_idx][0];

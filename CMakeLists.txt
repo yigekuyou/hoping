@@ -4,6 +4,7 @@ project(hoping LANGUAGES CXX)
 find_package(xdrfile REQUIRED)
 find_package(OpenCLHeadersCpp REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent)
+find_package(OpenMP REQUIRED)
 add_executable(${PROJECT_NAME}
     main.cpp
 )
@@ -15,6 +16,7 @@ target_link_libraries(${PROJECT_NAME}
         m
         Qt6::Core
         Qt6::Concurrent
+        OpenMP::OpenMP_CXX
 )
 
 include(GNUInstallDirs)
