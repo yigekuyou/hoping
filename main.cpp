@@ -115,11 +115,11 @@ public:
 						int i = get_global_id(0);
 						int t = get_global_id(1);
 						if(i >= n_sol || t >= total_frames ) return;
-
+						__global const float* traj = &coords[i * total_frames * 3];
 						// --- 计算位移 Displacement: |r(t) - r(0)| ---
 						int curr_base = (t * n_sol + i) * 3;
-						float3 p_curr = vload3(0, &coords[curr_base]);
-						float3 p_init = vload3(0, &coords[i * 3]);
+						float3 p_curr = vload3(t, traj);
+						float3 p_init = vload3(0, traj);
 						float dist = distance(p_curr, p_init);
 						// --- 计算 Hopping Value ---
 						float hopping_val = 0.0f;
@@ -128,8 +128,8 @@ public:
 						if(t >= hw && t < (total_frames - hw)) {
 							// 窗口 A [t-hw 到 t] 和 窗口 B [t 到 t+hw] 的平均位置
 							for(int j = 0; j <= hw; j++) {
-								avg_A += vload3(0, &coords[((t - j) * n_sol + i) * 3]);
-								avg_B += vload3(0, &coords[((t + j) * n_sol + i) * 3]);
+								avg_A += vload3(t - j, traj);
+								avg_B += vload3(t + j, traj);
 							}
 							avg_A /= (float)(hw + 1) ;
 							avg_B /= (float)(hw + 1) ;
@@ -138,8 +138,8 @@ public:
 
 							// 计算hopping
 							for(int j = 0; j <= hw; j++) {
-								float3 pos_A = vload3(0, &coords[((t - j) * n_sol + i) * 3]);
-								float3 pos_B = vload3(0, &coords[((t + j) * n_sol + i) * 3]);
+								float3 pos_A = vload3(t - j, traj);
+								float3 pos_B = vload3(t + j, traj);
 
 								float3 diffA = pos_A - avg_B;
 								MS_A_to_B += dot(diffA, diffA);
@@ -148,11 +148,10 @@ public:
 								MS_B_to_A += dot(diffB, diffB);
 							}
 
-							hopping_val = native_sqrt(MS_A_to_B  * MS_B_to_A );
+							hopping_val = native_sqrt(MS_A_to_B/(hw+1)  * MS_B_to_A/(hw+1));
 							}
 						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
-
 				)";
 				const std::string optics_time_src = R"(
 				)";
@@ -169,7 +168,7 @@ public:
 				cl::Buffer buf_coords(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, coords_size);
 				cl::Buffer buf_res(context, CL_MEM_WRITE_ONLY | CL_MEM_ALLOC_HOST_PTR, res_size);
 				float* host_coords_ptr = (float*)queue.enqueueMapBuffer(
-								buf_coords, CL_TRUE, CL_MAP_WRITE, 0, coords_size);
+				buf_coords, CL_TRUE, CL_MAP_WRITE, 0, coords_size);
 //				cl::Buffer buf_core(context, CL_MEM_WRITE_ONLY |CL_MEM_HOST_READ_ONLY, n_sol * total_frames * sizeof(float));
 				// 5. 执行
 				k_hop.setArg(0, buf_coords);
@@ -191,11 +190,14 @@ public:
 				while(read_xtc(xd, natoms, &step, &time, box, coords.data(), &prec) == 0) {
 						float* frame_base = host_coords_ptr + (size_t)frames * n_sol * 3;
 						for (int i = 0; i < n_sol; ++i) {
-								int idx = o_indices[i];
-								frame_base[i * 3 + 0] = coords[idx][0] * 10.0f;
-								frame_base[i * 3 + 1] = coords[idx][1] * 10.0f;
-								frame_base[i * 3 + 2] = coords[idx][2] * 10.0f;
-						}
+										int atom_idx = o_indices[i];
+										// 核心改变：将当前帧的数据存放到该原子对应的轨迹区间
+										// 存储格式：[Atom 0: T0,T1,T2...][Atom 1: T0,T1,T2...]
+										size_t offset = ((size_t)i * total_frames + frames) * 3;
+										host_coords_ptr[offset + 0] = coords[atom_idx][0];
+										host_coords_ptr[offset + 1] = coords[atom_idx][1];
+										host_coords_ptr[offset + 2] = coords[atom_idx][2];
+								}
 						frames++;
 				}
 				xdrfile_close(xd);
