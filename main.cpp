@@ -282,9 +282,9 @@ int main(int argc, char** argv) {
 		QStringList args = QCoreApplication::arguments();
 
 		if (args.size() < 3) {
-			qInfo().noquote() << QString("用法: %1 <gro> <xtc> [output] [resNames] [atomNames]")
+			qInfo().noquote() << QString("用法: %1 <gro> <xtc> [output] [resName:atomNames|atomNames,resName:atomNames,]")
 																		 .arg(args.at(0));
-			qInfo().noquote() << "示例: hoping sys.gro traj.xtc out.csv  SOL::H1|H2,R03:O";
+			qInfo().noquote() << "示例: hoping sys.gro traj.xtc out.csv  SOL:H1|H2,R03:O";
 			return 1;
 		}
 
