@@ -30,6 +30,10 @@ public:
 				QString xtc_file;
 				QString output_file = "results.csv";
 				int tw_frames = 20;
+				QMap<QString, QStringList> atom_map ={
+					{"R03", {"O"}},
+					{"SOL", {"OW"}}
+			};
 		};
 
 		HoppingAnalyzer(Config c) : cfg(c) {}
@@ -58,21 +62,31 @@ public:
 						if (line.isNull() || line.length() < 20) break;
 						// GRO 格式固定列宽：
 						// 残基序号(5位), 残基名(5位), 原子名(5位), 原子序号(5位)...
-						QString residueName = line.mid(5, 5).trimmed();
-						QString atomName = line.mid(10, 5).trimmed();
+						// QStringView 只是一个指向 line 内部内存的指针+长度，不产生新字符串
+						QStringView resName = QStringView(line).mid(5, 5).trimmed();
+						QStringView atomName = QStringView(line).mid(10, 5).trimmed();
 						// 调试输出：检查实际裁剪后的字符串
-						 qDebug() << "Index:" << i << "Res:" << residueName << "Atom:" << atomName;
 						// 匹配
-						if (residueName == "R03" && atomName.startsWith('O')) {
-								idx.push_back(i);
-						}
-				}
-				return idx;
-		}
+						bool match = false;
+						// 检查是否在名单中
+						if (!cfg.atom_map.contains(resName.toString())) continue;
+						const QStringList& allowedAtoms = cfg.atom_map[resName.toString()];
+								// 检查原子名是否匹配对应的列表
+								for (const QString& target : allowedAtoms) {
+										if (atomName.startsWith(target)) {
+												match = true;
+												break;
+										}
+								}
+						if (!match) continue;
+						idx.push_back(i);
+			}return idx;
+}
 		void execute() {
 			QVector<int> o_indices = getOxygenIndices();
 			if (o_indices.isEmpty()) {
-					qCritical() << "错误: 未找到符合条件的原子";
+					qCritical() << "错误: 未找到符合条件的原子:"
+					<< cfg.atom_map;
 					return;
 			}
 				int n_sol = o_indices.size();
@@ -149,7 +163,7 @@ public:
 								MS_B_to_A += dot(diffB, diffB);
 							}
 
-							hopping_val = native_sqrt(MS_A_to_B/(hw+1)  * MS_B_to_A/(hw+1));
+							hopping_val = sqrt(MS_A_to_B/(hw+1)  * MS_B_to_A/(hw+1));
 							}
 						res[t * n_sol + i] = (float2)(hopping_val, dist);
 						}
@@ -268,10 +282,10 @@ int main(int argc, char** argv) {
 		QStringList args = QCoreApplication::arguments();
 
 		if (args.size() < 3) {
-				// 使用 qInfo
-				std::cout << "用法: " << args.at(0).toLocal8Bit().constData()
-									<< " <system.gro> <traj.xtc> [output.csv]" << std::endl;
-				return 1;
+			qInfo().noquote() << QString("用法: %1 <gro> <xtc> [output] [resNames] [atomNames]")
+																		 .arg(args.at(0));
+			qInfo().noquote() << "示例: hoping sys.gro traj.xtc out.csv  SOL::H1|H2,R03:O";
+			return 1;
 		}
 
 		//填充配置
@@ -284,8 +298,20 @@ int main(int argc, char** argv) {
 		if (args.size() >= 4) {
 				cfg.output_file = args.at(3);
 		}
-
-		// 4. 逻辑执行
+		// 解析参数 (格式: SOL:H,R03:O)
+			if (args.size() >= 5 && args.at(4).contains(':')) {
+		{
+						QString rawFilter = args.at(4);
+						QStringList pairs = rawFilter.split(',', Qt::SkipEmptyParts);
+								for (const QString& pair : pairs) {
+										QStringList parts = pair.split(':', Qt::SkipEmptyParts);
+										if (parts.size() == 2) {
+												cfg.atom_map.insert(parts[0].trimmed(), parts[1].split('|', Qt::SkipEmptyParts));
+										}
+								}
+				}
+			}
+		//  逻辑执行
 		HoppingAnalyzer analyzer(cfg);
 		analyzer.execute();
 		return 0;
